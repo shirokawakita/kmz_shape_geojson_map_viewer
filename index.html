@@ -3,10 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KMZ, Shape and GeoJSON Map Viewer</title>
+    <title>KMZ, Shape and GeoJSON Map Viewer and Drawer</title>
     
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Leaflet Draw CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
     
     <style>
         body {
@@ -164,8 +166,8 @@
 </head>
 <body>
     <div class="header">
-        <h1>🗺️ KMZ, Shape and GeoJSON Map Viewer</h1>
-        <p style="margin: 5px 0 0 0; font-size: 14px;">Display KMZ, Shape, and GeoJSON files on GSI maps</p>
+        <h1>🗺️ KMZ, Shape and GeoJSON Map Viewer and Drawer</h1>
+        <p style="margin: 5px 0 0 0; font-size: 14px;">Display and draw KMZ, Shape, and GeoJSON files on GSI maps</p>
     </div>
     
     <div class="controls">
@@ -185,6 +187,11 @@
         </div>
         
         <button id="clearLayers" class="clear-btn">レイヤーをクリア</button>
+        
+        <div class="file-input-group">
+            <label>描画機能</label>
+            <button id="exportDrawnPolygons" class="clear-btn" style="background-color: #27ae60;">描画ポリゴンをGeoJSONで保存</button>
+        </div>
     </div>
     
     <div class="map-container">
@@ -222,6 +229,12 @@
                     <label for="geojsonLayer">GeoJSONレイヤー（全体）</label>
                 </div>
             </div>
+            <div id="drawnPolygonControls">
+                <div class="layer-item">
+                    <input type="checkbox" id="drawnPolygonLayer" checked>
+                    <label for="drawnPolygonLayer">描画ポリゴン（全体）</label>
+                </div>
+            </div>
         </div>
         
         <div id="status" class="status">読み込み中...</div>
@@ -229,6 +242,8 @@
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet Draw JS -->
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
     <!-- JSZip for handling ZIP files -->
     <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
     <!-- Shapefile.js for handling Shapefiles -->
@@ -265,8 +280,41 @@
             shape: L.layerGroup(),
             geojson: L.layerGroup(),
             shapePolygons: [], // 個別のポリゴンレイヤーを保存
-            geojsonPolygons: [] // 個別のGeoJSONポリゴンレイヤーを保存
+            geojsonPolygons: [], // 個別のGeoJSONポリゴンレイヤーを保存
+            drawnPolygons: [] // 描画されたポリゴンを保存
         };
+
+        // 描画レイヤーグループを作成
+        const drawnItems = new L.FeatureGroup();
+        map.addLayer(drawnItems);
+
+        // 描画コントロールを作成（ポリゴンのみ有効）
+        const drawControl = new L.Control.Draw({
+            edit: {
+                featureGroup: drawnItems,
+                remove: true
+            },
+            draw: {
+                polygon: {
+                    allowIntersection: false,
+                    drawError: {
+                        color: '#e1e100',
+                        message: '<strong>Error:</strong> ポリゴンが交差しています!'
+                    },
+                    shapeOptions: {
+                        color: '#97009c',
+                        fillColor: '#ff69b4',
+                        fillOpacity: 0.3
+                    }
+                },
+                polyline: false,
+                rectangle: false,
+                circle: false,
+                marker: false,
+                circlemarker: false
+            }
+        });
+        map.addControl(drawControl);
 
         // オーバーレイレイヤーを地図に追加（ポリゴン配列は除外、shape/geojsonは使用しない）
         overlayLayers.kmz.addTo(map);
@@ -344,6 +392,20 @@
         function updateGeoJSONLayerMasterCheckbox() {
             const masterCheckbox = document.getElementById('geojsonLayer');
             const polygonCheckboxes = document.querySelectorAll('[id^="geojsonPolygon_"]');
+            
+            if (polygonCheckboxes.length === 0) {
+                masterCheckbox.checked = false;
+                return;
+            }
+            
+            const checkedCount = Array.from(polygonCheckboxes).filter(cb => cb.checked).length;
+            masterCheckbox.checked = checkedCount === polygonCheckboxes.length;
+        }
+
+        // 全体チェックボックスの状態を更新（描画ポリゴン用）
+        function updateDrawnPolygonLayerMasterCheckbox() {
+            const masterCheckbox = document.getElementById('drawnPolygonLayer');
+            const polygonCheckboxes = document.querySelectorAll('[id^="drawnPolygon_"]');
             
             if (polygonCheckboxes.length === 0) {
                 masterCheckbox.checked = false;
@@ -456,12 +518,100 @@
             updateGeoJSONLayerMasterCheckbox();
         }
 
+        // 描画ポリゴンコントロールを動的に更新
+        function updateDrawnPolygonControls() {
+            const controlsContainer = document.getElementById('drawnPolygonControls');
+            
+            // 既存の個別ポリゴンコントロールを削除
+            const existingPolygonControls = controlsContainer.querySelectorAll('.polygon-control');
+            existingPolygonControls.forEach(control => control.remove());
+
+            // 各ポリゴンのコントロールを追加
+            overlayLayers.drawnPolygons.forEach((polygonData, index) => {
+                const controlDiv = document.createElement('div');
+                controlDiv.className = 'layer-item polygon-control';
+                controlDiv.style.marginLeft = '20px'; // インデント
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `drawnPolygon_${index}`;
+                checkbox.checked = true;
+                
+                const label = document.createElement('label');
+                label.htmlFor = `drawnPolygon_${index}`;
+                label.textContent = polygonData.name;
+                label.style.fontSize = '13px';
+                label.style.color = '#555';
+                
+                controlDiv.appendChild(checkbox);
+                controlDiv.appendChild(label);
+                controlsContainer.appendChild(controlDiv);
+                
+                // イベントリスナーを追加
+                checkbox.addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        // レイヤーが既に地図に追加されていない場合のみ追加
+                        if (!drawnItems.hasLayer(polygonData.layer)) {
+                            drawnItems.addLayer(polygonData.layer);
+                        }
+                    } else {
+                        // レイヤーが地図に追加されている場合のみ削除
+                        if (drawnItems.hasLayer(polygonData.layer)) {
+                            drawnItems.removeLayer(polygonData.layer);
+                        }
+                    }
+                    // 全体チェックボックスの状態を更新
+                    updateDrawnPolygonLayerMasterCheckbox();
+                });
+            });
+            
+            // 初期状態で全体チェックボックスを更新
+            updateDrawnPolygonLayerMasterCheckbox();
+        }
+
         // 背景地図の切り替え
         document.querySelectorAll('input[name="basemap"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
                 map.removeLayer(currentBaseMap);
                 currentBaseMap = baseMaps[e.target.value].addTo(map);
             });
+        });
+
+        // 描画イベントハンドラー
+        map.on('draw:created', function (e) {
+            const layer = e.layer;
+            drawnItems.addLayer(layer);
+            
+            // 描画されたポリゴンを管理用配列に追加
+            const polygonIndex = overlayLayers.drawnPolygons.length + 1;
+            const polygonName = `描画ポリゴン ${polygonIndex}`;
+            
+            overlayLayers.drawnPolygons.push({
+                name: polygonName,
+                layer: layer,
+                geoJson: layer.toGeoJSON()
+            });
+            
+            // コントロールパネル更新
+            updateDrawnPolygonControls();
+            
+            console.log(`新しいポリゴンを描画しました: ${polygonName}`);
+        });
+
+        // 削除イベントハンドラー
+        map.on('draw:deleted', function (e) {
+            const layers = e.layers;
+            layers.eachLayer(function (layer) {
+                // 管理用配列から削除
+                const index = overlayLayers.drawnPolygons.findIndex(p => p.layer === layer);
+                if (index !== -1) {
+                    console.log(`ポリゴンを削除しました: ${overlayLayers.drawnPolygons[index].name}`);
+                    overlayLayers.drawnPolygons.splice(index, 1);
+                }
+            });
+            
+            // コントロールパネル更新
+            updateDrawnPolygonControls();
         });
 
         // KMZファイルの処理
@@ -825,6 +975,10 @@
             });
             overlayLayers.geojsonPolygons = [];
             
+            // 描画ポリゴンレイヤーをクリア
+            drawnItems.clearLayers();
+            overlayLayers.drawnPolygons = [];
+            
             // ポリゴンコントロールを更新（削除）
             const shapeControlsContainer = document.getElementById('shapeLayerControls');
             const existingShapePolygonControls = shapeControlsContainer.querySelectorAll('.polygon-control');
@@ -833,6 +987,10 @@
             const geojsonControlsContainer = document.getElementById('geojsonLayerControls');
             const existingGeoJSONPolygonControls = geojsonControlsContainer.querySelectorAll('.polygon-control');
             existingGeoJSONPolygonControls.forEach(control => control.remove());
+            
+            const drawnControlsContainer = document.getElementById('drawnPolygonControls');
+            const existingDrawnPolygonControls = drawnControlsContainer.querySelectorAll('.polygon-control');
+            existingDrawnPolygonControls.forEach(control => control.remove());
             
             // ファイル入力をリセット
             document.getElementById('kmzFile').value = '';
@@ -843,6 +1001,7 @@
             document.getElementById('kmzLayer').checked = true;
             document.getElementById('shapeLayer').checked = false; // Shapeファイルがないので未チェック
             document.getElementById('geojsonLayer').checked = false; // GeoJSONファイルがないので未チェック
+            document.getElementById('drawnPolygonLayer').checked = false; // 描画ポリゴンがないので未チェック
             
             console.log('すべてのレイヤーがクリアされました');
         });
@@ -902,10 +1061,63 @@
             });
         });
 
+        document.getElementById('drawnPolygonLayer').addEventListener('change', (e) => {
+            const isChecked = e.target.checked;
+            
+            // 個別ポリゴンの表示状態を一括変更
+            overlayLayers.drawnPolygons.forEach((polygonData, index) => {
+                const checkbox = document.getElementById(`drawnPolygon_${index}`);
+                if (checkbox) {
+                    checkbox.checked = isChecked;
+                    
+                    // レイヤーの表示/非表示を制御
+                    if (isChecked) {
+                        if (!drawnItems.hasLayer(polygonData.layer)) {
+                            drawnItems.addLayer(polygonData.layer);
+                        }
+                    } else {
+                        if (drawnItems.hasLayer(polygonData.layer)) {
+                            drawnItems.removeLayer(polygonData.layer);
+                        }
+                    }
+                }
+            });
+        });
+
+        // GeoJSONエクスポート機能
+        document.getElementById('exportDrawnPolygons').addEventListener('click', () => {
+            if (overlayLayers.drawnPolygons.length === 0) {
+                alert('描画されたポリゴンがありません。先にポリゴンを描画してください。');
+                return;
+            }
+
+            // 描画されたポリゴンをGeoJSONとして出力
+            const geoJsonFeatures = overlayLayers.drawnPolygons.map(polygonData => polygonData.geoJson);
+            
+            const geoJsonCollection = {
+                type: "FeatureCollection",
+                features: geoJsonFeatures
+            };
+
+            // ファイルとしてダウンロード
+            const dataStr = JSON.stringify(geoJsonCollection, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(dataBlob);
+            link.download = `drawn_polygons_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.geojson`;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            console.log(`${overlayLayers.drawnPolygons.length}個の描画ポリゴンをGeoJSONファイルとしてエクスポートしました`);
+        });
+
         // 初期表示時にワークスペース内のファイルを自動読み込み（オプション）
         window.addEventListener('load', () => {
-            console.log('KMZ, Shape and GeoJSON Map Viewer has started');
-            console.log('Select KMZ, Shape, or GeoJSON files to display on the map');
+            console.log('KMZ, Shape and GeoJSON Map Viewer and Drawer has started');
+            console.log('Select KMZ, Shape, or GeoJSON files to display on the map, or draw polygons directly');
         });
     </script>
 </body>
